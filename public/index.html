@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Minimap Sync</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 0; }
+    canvas { border: 1px solid black; cursor: crosshair; display: block; margin: 20px auto; }
+    button { margin: 10px; padding: 10px 20px; font-size: 16px; cursor: pointer; }
+    #coords { margin-top: 10px; font-size: 14px; color: gray; }
+  </style>
+</head>
+<body>
+  <h1>Minimap Sync</h1>
+  <button id="clearAll">Clear All Points</button>
+  <canvas id="mapCanvas" width="800" height="600"></canvas>
+  <div id="coords">Coordinates: (x: 0, y: 0)</div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+    const clearAllButton = document.getElementById('clearAll');
+    const coordsDisplay = document.getElementById('coords');
+    const socket = io();
+
+    let mapImage = new Image();
+    mapImage.src = './cape.png';
+
+    const markers = []; // Local markers state
+    const bossPoints = [
+      { x: 117, y: 74, radius: 30 },
+      { x: 217, y: 71, radius: 30 },
+      { x: 284, y: 61, radius: 30 },
+      { x: 223, y: 132, radius: 30 },
+      { x: 342, y: 223, radius: 30 },
+	  
+      { x: 543, y: 113, radius: 30 },
+      { x: 624, y: 149, radius: 30 },
+      { x: 687, y: 98, radius: 30 },
+      { x: 743, y: 51, radius: 30 },
+	  
+      { x: 143, y: 322, radius: 25 },
+      { x: 152, y: 379, radius: 25 },
+      { x: 103, y: 458, radius: 25 },
+      { x: 161, y: 457, radius: 25 },
+      { x: 278, y: 366, radius: 25 },
+      { x: 283, y: 506, radius: 25 },
+	  
+	  
+      { x: 492, y: 271, radius: 30 },
+      { x: 716, y: 271, radius: 30 },
+      { x: 547, y: 417, radius: 30 },
+      { x: 558, y: 486, radius: 30 },
+      { x: 621, y: 416, radius: 30 }
+    ];
+
+    // Draw markers on the canvas
+    function redrawMarkers() {
+      ctx.drawImage(mapImage, 0, 0, canvas.width, canvas.height);
+
+      bossPoints.forEach(point => {
+        ctx.strokeStyle = 'lightblue';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, point.radius, 0, Math.PI * 2);
+        ctx.stroke();
+      });
+
+      markers.forEach(marker => {
+        ctx.fillStyle = marker.status === 'alive' ? '#FF0000' : '#00FF00'; // Brighter red and green
+        ctx.beginPath();
+        ctx.arc(marker.x, marker.y, 10, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    mapImage.onload = () => {
+      redrawMarkers();
+    };
+
+    // Check if a click is near a boss point
+    function getNearestBossPoint(x, y) {
+      return bossPoints.find(point => Math.hypot(point.x - x, point.y - y) <= point.radius);
+    }
+
+    // Handle canvas clicks to toggle markers
+    canvas.addEventListener('click', (event) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+
+      const bossPoint = getNearestBossPoint(x, y);
+      if (bossPoint) {
+        let marker = markers.find(m => m.x === bossPoint.x && m.y === bossPoint.y);
+        if (marker) {
+          marker.status = marker.status === 'alive' ? 'dead' : 'alive';
+        } else {
+          marker = { x: bossPoint.x, y: bossPoint.y, status: 'alive' };
+          markers.push(marker);
+        }
+
+        redrawMarkers();
+        socket.emit('updateMarker', marker);
+      }
+    });
+
+    // Display real-time cursor coordinates
+    canvas.addEventListener('mousemove', (event) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.round(event.clientX - rect.left);
+      const y = Math.round(event.clientY - rect.top);
+      coordsDisplay.textContent = `Coordinates: (x: ${x}, y: ${y})`;
+    });
+
+    // Handle right-clicks to clear markers
+    canvas.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+
+      const bossPoint = getNearestBossPoint(x, y);
+      if (bossPoint) {
+        const markerIndex = markers.findIndex(m => m.x === bossPoint.x && m.y === bossPoint.y);
+        if (markerIndex !== -1) {
+          const marker = markers[markerIndex];
+          markers.splice(markerIndex, 1);
+          redrawMarkers();
+          socket.emit('updateMarker', { x: marker.x, y: marker.y, status: 'clear' });
+        }
+      }
+    });
+
+    // Handle Clear All button click
+    clearAllButton.addEventListener('click', () => {
+      markers.length = 0;
+      redrawMarkers();
+      socket.emit('clearAllMarkers');
+    });
+
+    // Receive updates from the server
+    socket.on('initialize', (serverMarkers) => {
+      markers.length = 0;
+      markers.push(...serverMarkers);
+      redrawMarkers();
+    });
+
+    socket.on('updateMarker', (marker) => {
+      const existingMarker = markers.find(m => m.x === marker.x && m.y === marker.y);
+      if (existingMarker) {
+        if (marker.status === 'clear') {
+          markers.splice(markers.indexOf(existingMarker), 1);
+        } else {
+          existingMarker.status = marker.status;
+        }
+      } else if (marker.status !== 'clear') {
+        markers.push(marker);
+      }
+      redrawMarkers();
+    });
+
+    socket.on('clearAllMarkers', () => {
+      markers.length = 0;
+      redrawMarkers();
+    });
+  </script>
+</body>
+</html>
